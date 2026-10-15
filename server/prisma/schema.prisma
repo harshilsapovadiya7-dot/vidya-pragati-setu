@@ -1,0 +1,391 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS (SQLite uses String fields with validation) ───
+
+// Role: STUDENT, PARENT, TEACHER, PRINCIPAL, DISTRICT_OFFICER, STATE_ADMIN
+// Gender: MALE, FEMALE, OTHER
+// Category: GENERAL, SC, ST, OBC, MINORITY, EWS
+// BenefitType: FINANCIAL, MATERIAL, BOTH
+// DocumentCategory: IDENTITY, INCOME_CERTIFICATE, CASTE_CERTIFICATE, MARKSHEET, ENROLLMENT_CERTIFICATE, BANK_PROOF, PHOTOGRAPH, OTHER
+// VerificationStatus: PENDING, VERIFIED, REJECTED, EXPIRED
+// EligibilityStatus: ELIGIBLE, NOT_ELIGIBLE, NEEDS_VERIFICATION, INSUFFICIENT_INFORMATION, APPLICATION_CLOSED
+// ApplicationStatus: DRAFT, SUBMITTED, SCHOOL_REVIEW, CORRECTION_REQUIRED, DISTRICT_REVIEW, APPROVED, REJECTED, PAYMENT_PENDING, PAYMENT_PROCESSING, PAID
+// AssetStatus: ALLOCATED, DISPATCHED, RECEIVED_BY_SCHOOL, ASSIGNED_TO_BENEFICIARY, DELIVERY_CONFIRMED, DELIVERY_EXCEPTION
+// PaymentStatus: INITIATED, BANK_DETAILS_SUBMITTED, BANK_VERIFICATION_PENDING, PAYMENT_REQUEST_PREPARED, PAYMENT_REQUEST_SUBMITTED, PROCESSING, SUCCESSFUL, FAILED, RECONCILIATION_PENDING
+// NotificationType: INFO, SUCCESS, WARNING, ACTION_REQUIRED
+// RuleOperator: EQUALS, NOT_EQUALS, GREATER_THAN, LESS_THAN, GREATER_EQUAL, LESS_EQUAL, IN, NOT_IN, BETWEEN
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         String   @default("STUDENT") // Role enum
+  firstName    String
+  lastName     String
+  phone        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  studentProfile StudentProfile?
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+
+  @@index([role])
+  @@index([email])
+}
+
+model StudentProfile {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  studentId                 String   @unique // e.g., GJ2024STU001
+  dateOfBirth               DateTime?
+  gender                    String?  // Gender enum
+  academicYear              String   @default("2024-25")
+  currentGrade              Int
+  schoolId                  String
+  districtId                String
+  taluka                    String?
+  parentGuardianName        String?
+  parentGuardianContact     String?
+  annualFamilyIncome        Float?
+  category                  String   @default("GENERAL") // Category enum
+  academicMarks             Float?
+  attendancePercentage      Float?
+  bankAccountVerified       Boolean  @default(false)
+  documentVerificationStatus String  @default("PENDING")
+  profileCompletionPercentage Int    @default(0)
+  isPromoted                Boolean  @default(false)
+  previousGrade             Int?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  user          User                    @relation(fields: [userId], references: [id])
+  school        School                  @relation(fields: [schoolId], references: [id])
+  district      District                @relation(fields: [districtId], references: [id])
+  documents     StudentDocument[]
+  evaluations   EligibilityEvaluation[]
+  applications  ScholarshipApplication[]
+  assets        AssetAllocation[]
+  payments      PaymentRecord[]
+
+  @@index([schoolId])
+  @@index([districtId])
+  @@index([currentGrade])
+  @@index([category])
+  @@index([academicYear])
+}
+
+model School {
+  id            String   @id @default(uuid())
+  name          String
+  udiseCode     String   @unique
+  districtId    String
+  taluka        String?
+  address       String?
+  principalName String?
+  contactPhone  String?
+  contactEmail  String?
+  totalStudents Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  district District         @relation(fields: [districtId], references: [id])
+  students StudentProfile[]
+  assets   AssetAllocation[]
+
+  @@index([districtId])
+}
+
+model District {
+  id            String   @id @default(uuid())
+  name          String
+  code          String   @unique
+  state         String   @default("Gujarat")
+  totalSchools  Int      @default(0)
+  totalStudents Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  schools  School[]
+  students StudentProfile[]
+  assets   AssetAllocation[]
+}
+
+model Scheme {
+  id                       String   @id @default(uuid())
+  schemeId                  String   @unique // e.g., NAMO_LAKSHMI
+  name                     String
+  description              String
+  benefitType              String   // BenefitType enum
+  eligibleGrades           String   // JSON array of ints
+  applicationStartDate     DateTime?
+  applicationEndDate       DateTime?
+  benefitAmount            Float?
+  materialBenefitDescription String?
+  isEnabled                Boolean  @default(true)
+  currentRuleVersion       Int      @default(1)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  rules             SchemeEligibilityRule[]
+  requiredDocuments RequiredDocument[]
+  applications      ScholarshipApplication[]
+  evaluations       EligibilityEvaluation[]
+  assets            AssetAllocation[]
+  payments          PaymentRecord[]
+}
+
+model SchemeEligibilityRule {
+  id             String   @id @default(uuid())
+  schemeId       String
+  ruleVersion    Int      @default(1)
+  parameterName  String   // e.g., "currentGrade", "gender", "annualFamilyIncome", "academicMarks"
+  operator       String   // RuleOperator enum
+  parameterValue String   // JSON encoded value
+  isRequired     Boolean  @default(true)
+  description    String?
+  createdAt      DateTime @default(now())
+
+  scheme Scheme @relation(fields: [schemeId], references: [id])
+
+  @@unique([schemeId, ruleVersion, parameterName])
+  @@index([schemeId])
+}
+
+model RequiredDocument {
+  id               String  @id @default(uuid())
+  schemeId         String
+  documentCategory String  // DocumentCategory enum
+  description      String?
+  isMandatory      Boolean @default(true)
+
+  scheme Scheme @relation(fields: [schemeId], references: [id])
+
+  @@index([schemeId])
+}
+
+model StudentDocument {
+  id                 String   @id @default(uuid())
+  studentProfileId   String
+  documentCategory   String   // DocumentCategory enum
+  fileName           String
+  filePath           String
+  fileSize           Int
+  mimeType           String
+  verificationStatus String   @default("PENDING") // VerificationStatus enum
+  uploadedAt         DateTime @default(now())
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  expiryDate         DateTime?
+  rejectionReason    String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id])
+
+  @@index([studentProfileId])
+  @@index([documentCategory])
+  @@index([verificationStatus])
+}
+
+model EligibilityEvaluation {
+  id                 String   @id @default(uuid())
+  studentProfileId   String
+  schemeId           String
+  status             String   // EligibilityStatus enum
+  reasons            String   // JSON array of strings
+  missingInformation String   // JSON array of strings
+  documentsRequired  String?  // JSON array
+  ruleVersion        Int
+  evaluatedAt        DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  studentProfile StudentProfile @relation(fields: [studentProfileId], references: [id])
+  scheme         Scheme         @relation(fields: [schemeId], references: [id])
+
+  @@index([studentProfileId])
+  @@index([schemeId])
+  @@index([status])
+}
+
+model ScholarshipApplication {
+  id                 String   @id @default(uuid())
+  applicationRef     String   @unique // e.g., VPS-APP-2024-000001
+  studentProfileId   String
+  schemeId           String
+  academicYear       String   @default("2024-25")
+  status             String   @default("DRAFT") // ApplicationStatus enum
+  schemeSpecificData  String?  // JSON
+  submittedAt        DateTime?
+  schoolReviewedAt   DateTime?
+  schoolReviewedBy   String?
+  districtReviewedAt DateTime?
+  districtReviewedBy String?
+  correctionReason   String?
+  rejectionReason    String?
+  approvalNotes      String?
+  ruleVersionUsed    Int      @default(1)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  studentProfile StudentProfile          @relation(fields: [studentProfileId], references: [id])
+  scheme         Scheme                  @relation(fields: [schemeId], references: [id])
+  statusHistory  ApplicationStatusHistory[]
+  payments       PaymentRecord[]
+
+  @@unique([studentProfileId, schemeId, academicYear])
+  @@index([studentProfileId])
+  @@index([schemeId])
+  @@index([status])
+  @@index([academicYear])
+}
+
+model ApplicationStatusHistory {
+  id            String   @id @default(uuid())
+  applicationId String
+  fromStatus    String?
+  toStatus      String
+  changedBy     String?
+  reason        String?
+  timestamp     DateTime @default(now())
+
+  application ScholarshipApplication @relation(fields: [applicationId], references: [id])
+
+  @@index([applicationId])
+}
+
+model AssetAllocation {
+  id                       String   @id @default(uuid())
+  assetId                  String   @unique // e.g., VPS-BIKE-2024-0001
+  schemeId                 String
+  academicYear             String   @default("2024-25")
+  studentProfileId         String
+  schoolId                 String
+  districtId               String
+  status                   String   @default("ALLOCATED") // AssetStatus enum
+  allocationDate           DateTime @default(now())
+  dispatchDate             DateTime?
+  schoolReceiptDate        DateTime?
+  deliveryConfirmationDate DateTime?
+  deliveryVerificationMethod String?
+  deliveryOperator         String?
+  exceptionReason          String?
+  qrCodeData               String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  scheme         Scheme                @relation(fields: [schemeId], references: [id])
+  studentProfile StudentProfile        @relation(fields: [studentProfileId], references: [id])
+  school         School                @relation(fields: [schoolId], references: [id])
+  district       District              @relation(fields: [districtId], references: [id])
+  trackingEvents AssetTrackingEvent[]
+  verification   DeliveryVerification?
+
+  @@index([studentProfileId])
+  @@index([schoolId])
+  @@index([districtId])
+  @@index([status])
+  @@index([schemeId])
+}
+
+model AssetTrackingEvent {
+  id                String   @id @default(uuid())
+  assetAllocationId String
+  eventType         String
+  description       String
+  performedBy       String?
+  metadata          String?  // JSON
+  timestamp         DateTime @default(now())
+
+  assetAllocation AssetAllocation @relation(fields: [assetAllocationId], references: [id])
+
+  @@index([assetAllocationId])
+}
+
+model DeliveryVerification {
+  id                 String   @id @default(uuid())
+  assetAllocationId  String   @unique
+  verificationMethod String   // QR_CODE, OTP, MANUAL
+  verificationCode   String?
+  isVerified         Boolean  @default(false)
+  verifiedAt         DateTime?
+  verifiedBy         String?
+  studentConfirmed   Boolean  @default(false)
+  guardianName       String?
+  remarks            String?
+  createdAt          DateTime @default(now())
+
+  assetAllocation AssetAllocation @relation(fields: [assetAllocationId], references: [id])
+}
+
+model PaymentRecord {
+  id                   String   @id @default(uuid())
+  paymentRef           String   @unique // e.g., VPS-PAY-2024-000001
+  studentProfileId     String
+  applicationId        String
+  schemeId             String
+  academicYear         String   @default("2024-25")
+  approvedAmount       Float
+  paymentStatus        String   @default("INITIATED") // PaymentStatus enum
+  initiatedAt          DateTime @default(now())
+  lastUpdatedAt        DateTime @updatedAt
+  failureReason        String?
+  reconciliationStatus String?
+  bankName             String?
+  maskedAccountNumber  String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  studentProfile StudentProfile        @relation(fields: [studentProfileId], references: [id])
+  application    ScholarshipApplication @relation(fields: [applicationId], references: [id])
+  scheme         Scheme                 @relation(fields: [schemeId], references: [id])
+
+  @@index([studentProfileId])
+  @@index([applicationId])
+  @@index([paymentStatus])
+  @@index([schemeId])
+}
+
+model Notification {
+  id                String   @id @default(uuid())
+  userId            String
+  title             String
+  message           String
+  type              String   @default("INFO") // NotificationType enum
+  isRead            Boolean  @default(false)
+  relatedEntityType String?
+  relatedEntityId   String?
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  details    String?  // JSON
+  ipAddress  String?
+  timestamp  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType])
+  @@index([timestamp])
+}
